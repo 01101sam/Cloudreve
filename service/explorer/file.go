@@ -670,3 +670,67 @@ func RedirectDirectLink(c *gin.Context, name string) error {
 	c.Header("Cache-Control", fmt.Sprintf("public, max-age=%d", int(earliestExpire.Sub(time.Now()).Seconds())))
 	return nil
 }
+
+type (
+	EnableFileThumbnailParamCtx struct{}
+	EnableFileThumbnailService  struct {
+		Uri string `json:"uri" binding:"required"`
+	}
+)
+
+// Enable removes the 'thumb:disabled' metadata and triggers thumbnail regeneration
+func (s *EnableFileThumbnailService) Enable(c *gin.Context) error {
+	dep := dependency.FromContext(c)
+	user := inventory.UserFromContext(c)
+
+	// Get file manager
+	m := manager.NewFileManager(dep, user)
+	defer m.Recycle()
+
+	// Parse URI
+	uri, err := fs.NewUriFromString(s.Uri)
+	if err != nil {
+		return serializer.NewError(serializer.CodeParamErr, "unknown uri", err)
+	}
+
+	// Get the file with entities and metadata
+	file, err := m.Get(c, uri, dbfs.WithFileEntities(), dbfs.WithFilePublicMetadata())
+	if err != nil {
+		return err
+	}
+
+	// Check if it's a file (not a folder)
+	if file.Type() != types.FileTypeFile {
+		return fs.ErrNotSupportedAction.WithError(fmt.Errorf("thumbnails can only be enabled for files"))
+	}
+
+	// Check if thumbnail is actually disabled
+	if _, disabled := file.Metadata()[dbfs.ThumbDisabledKey]; !disabled {
+		return serializer.NewError(serializer.CodeParamErr, "thumbnail is not disabled for this file", nil)
+	}
+
+	// Remove the 'thumb:disabled' metadata key
+	err = m.PatchMedata(c, []*fs.URI{uri}, fs.MetadataPatch{
+		Key:    dbfs.ThumbDisabledKey,
+		Remove: true,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to remove thumbnail disabled flag: %w", err)
+	}
+
+	// Trigger thumbnail regeneration
+	latestEntity := file.PrimaryEntity()
+	if latestEntity == nil || latestEntity.ID() == 0 {
+		// No entity to regenerate from, but metadata is removed
+		return nil
+	}
+
+	// Submit thumbnail generation task and wait for completion
+	_, err = m.SubmitAndAwaitThumbnailTask(c, uri, file.Ext(), latestEntity)
+	if err != nil {
+		// Log the error but don't fail the request since metadata was already removed
+		dep.Logger().Warning("Failed to regenerate thumbnail for %s: %v", uri.String(), err)
+	}
+
+	return nil
+}

@@ -88,6 +88,21 @@ var (
 			},
 		},
 		"dav": {},
+		"thumb": {
+			wildcardMetadataKey: func(ctx context.Context, m *manager, patch *fs.MetadataPatch) error {
+				// Only allow removing thumb:disabled key
+				if patch.Key == dbfs.ThumbDisabledKey && patch.Remove {
+					return nil
+				}
+
+				// Allow setting thumb:disabled (for disabling thumbnails)
+				if patch.Key == dbfs.ThumbDisabledKey && !patch.Remove {
+					return nil
+				}
+
+				return fmt.Errorf("unsupported thumb metadata key: %s", patch.Key)
+			},
+		},
 		customizeMetadataSuffix: {
 			iconColorMetadataKey: validateColor(false),
 			emojiIconMetadataKey: func(ctx context.Context, m *manager, patch *fs.MetadataPatch) error {

@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const MaxFileNameLength = 256
+const MaxFileNameLength = 2048
 
 // validateFileName validates the file name.
 func validateFileName(name string) error {

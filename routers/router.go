@@ -701,6 +701,16 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 				controllers.FromJSON[explorer.GetDirectLinkService](explorer.GetDirectLinkParamCtx{}),
 				middleware.ValidateBatchFileCount(dep, explorer.GetDirectLinkParamCtx{}),
 				controllers.GetSource)
+
+			// File actions
+			action := file.Group("action")
+			{
+				// Enable thumbnail for a file
+				action.POST("enable-thumbnail",
+					controllers.FromJSON[explorer.EnableFileThumbnailService](explorer.EnableFileThumbnailParamCtx{}),
+					controllers.EnableFileThumbnail,
+				)
+			}
 		}
 
 		// 分享相关

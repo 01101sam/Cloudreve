@@ -388,3 +388,16 @@ func DeleteVersion(c *gin.Context) {
 
 	c.JSON(200, serializer.Response{})
 }
+
+// EnableFileThumbnail enables thumbnail for a file and regenerates it
+func EnableFileThumbnail(c *gin.Context) {
+	service := ParametersFromContext[*explorer.EnableFileThumbnailService](c, explorer.EnableFileThumbnailParamCtx{})
+	err := service.Enable(c)
+	if err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		c.Abort()
+		return
+	}
+
+	c.JSON(200, serializer.Response{})
+}
