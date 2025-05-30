@@ -3,6 +3,7 @@ package dbfs
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
+	"github.com/cristalhq/natsort"
 	"github.com/samber/lo"
 )
 
@@ -252,14 +254,56 @@ func (b *baseNavigator) children(ctx context.Context, parent *File, args *ListAr
 		return nil, fmt.Errorf("failed to get children: %w", err)
 	}
 
+	files := lo.FilterMap(children.Files, func(model *ent.File, index int) (*File, bool) {
+		f := newFile(parent, model)
+		return b.listFilter(ctx, f)
+	})
+
+	// Apply natural sorting if ordering by name
+	if args.Page != nil && args.Page.OrderBy == "name" {
+		applyNaturalSort(files, args.Page.Order)
+	}
+
 	return &ListResult{
-		Files: lo.FilterMap(children.Files, func(model *ent.File, index int) (*File, bool) {
-			f := newFile(parent, model)
-			return b.listFilter(ctx, f)
-		}),
+		Files:      files,
 		MixedType:  children.MixedType,
 		Pagination: children.PaginationResults,
 	}, nil
+}
+
+// applyNaturalSort sorts files naturally by name
+func applyNaturalSort(files []*File, order inventory.OrderDirection) {
+	// Separate folders and files
+	folders := lo.Filter(files, func(f *File, _ int) bool {
+		return f.Type() == types.FileTypeFolder
+	})
+	regularFiles := lo.Filter(files, func(f *File, _ int) bool {
+		return f.Type() != types.FileTypeFolder
+	})
+
+	// Natural sort folders
+	if len(folders) > 0 {
+		sort.SliceStable(folders, func(i, j int) bool {
+			return natsort.Less(folders[i].Name(), folders[j].Name())
+		})
+	}
+
+	// Natural sort files
+	if len(regularFiles) > 0 {
+		sort.SliceStable(regularFiles, func(i, j int) bool {
+			return natsort.Less(regularFiles[i].Name(), regularFiles[j].Name())
+		})
+	}
+
+	// Reverse if descending order
+	if order == inventory.OrderDirectionDesc {
+		lo.Reverse(folders)
+		lo.Reverse(regularFiles)
+	}
+
+	// Combine back (folders first, then files)
+	copy(files, folders)
+	copy(files[len(folders):], regularFiles)
 }
 
 func (b *baseNavigator) walk(ctx context.Context, levelFiles []*File, limit, depth int, f WalkFunc) error {
