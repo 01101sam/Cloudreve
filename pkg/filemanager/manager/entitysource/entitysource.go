@@ -26,6 +26,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/mime"
 	"github.com/cloudreve/Cloudreve/v4/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/rc4crypt"
 	"github.com/cloudreve/Cloudreve/v4/pkg/request"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
@@ -274,47 +275,62 @@ func (f *entitySource) Serve(w http.ResponseWriter, r *http.Request, opts ...Ent
 			return
 		}
 
-		start := time.Now()
-		proxy := &httputil.ReverseProxy{
-			Director: func(request *http.Request) {
-				request.URL.Scheme = target.Scheme
-				request.URL.Host = target.Host
-				request.URL.Path = target.Path
-				request.URL.RawPath = target.RawPath
-				request.URL.RawQuery = target.RawQuery
-				request.Host = target.Host
-				request.Header.Del("Authorization")
-			},
-			ModifyResponse: func(response *http.Response) error {
-				response.Header.Del("ETag")
-				response.Header.Del("Content-Disposition")
-				response.Header.Del("Cache-Control")
-				logging.Request(f.l,
-					false,
-					response.StatusCode,
-					response.Request.Method,
-					request.LocalIP,
-					response.Request.URL.String(),
-					"",
-					start,
-				)
-				return nil
-			},
-			ErrorHandler: func(writer http.ResponseWriter, request *http.Request, err error) {
-				f.l.Error("Reverse proxy error in %q: %s", request.URL.String(), err)
-				writer.WriteHeader(http.StatusBadGateway)
-				writer.Write([]byte("[Cloudreve] Bad Gateway"))
-			},
-		}
-
-		r = r.Clone(f.o.Ctx)
-		defer func() {
-			if err := recover(); err != nil && err != http.ErrAbortHandler {
-				panic(err)
+		// Check if we need to decrypt the content
+		if conf.DecodedFileEncryptionKey != nil && len(conf.DecodedFileEncryptionKey) > 0 {
+			// For encrypted files, we need to download and decrypt instead of reverse proxy
+			// Reset the request to download from remote storage
+			if err := f.resetRequest(); err != nil {
+				f.l.Warning("Failed to reset request for encrypted remote file: %s", err)
+				http.Error(w, "Failed to access remote file", http.StatusInternalServerError)
+				return
 			}
-		}()
-		proxy.ServeHTTP(w, r)
-		return
+
+			// Now serve the file like a local file (the decryption is handled in resetRequest)
+			// Continue with the local file serving logic below
+		} else {
+			// No encryption, use standard reverse proxy
+			start := time.Now()
+			proxy := &httputil.ReverseProxy{
+				Director: func(request *http.Request) {
+					request.URL.Scheme = target.Scheme
+					request.URL.Host = target.Host
+					request.URL.Path = target.Path
+					request.URL.RawPath = target.RawPath
+					request.URL.RawQuery = target.RawQuery
+					request.Host = target.Host
+					request.Header.Del("Authorization")
+				},
+				ModifyResponse: func(response *http.Response) error {
+					response.Header.Del("ETag")
+					response.Header.Del("Content-Disposition")
+					response.Header.Del("Cache-Control")
+					logging.Request(f.l,
+						false,
+						response.StatusCode,
+						response.Request.Method,
+						request.LocalIP,
+						response.Request.URL.String(),
+						"",
+						start,
+					)
+					return nil
+				},
+				ErrorHandler: func(writer http.ResponseWriter, request *http.Request, err error) {
+					f.l.Error("Reverse proxy error in %q: %s", request.URL.String(), err)
+					writer.WriteHeader(http.StatusBadGateway)
+					writer.Write([]byte("[Cloudreve] Bad Gateway"))
+				},
+			}
+
+			r = r.Clone(f.o.Ctx)
+			defer func() {
+				if err := recover(); err != nil && err != http.ErrAbortHandler {
+					panic(err)
+				}
+			}()
+			proxy.ServeHTTP(w, r)
+			return
+		}
 	}
 
 	code := http.StatusOK
@@ -593,14 +609,35 @@ func (f *entitySource) resetRequest() error {
 				return fmt.Errorf("failed to open inbound file: %w", err)
 			}
 
-			if f.pos > 0 {
-				_, err = file.Seek(f.pos, io.SeekStart)
+			// Check if we need to wrap with decryption
+			var fileReader io.ReadSeekCloser = file
+			if conf.DecodedFileEncryptionKey != nil && len(conf.DecodedFileEncryptionKey) > 0 {
+				// Get file size for the RC4StreamSeekReader
+				stat, err := file.Stat()
 				if err != nil {
+					file.Close()
+					return fmt.Errorf("failed to stat file for decryption: %w", err)
+				}
+				fileSize := stat.Size()
+
+				// Wrap with decryption
+				seekReader, err := rc4crypt.NewRC4StreamSeekReader(file, conf.DecodedFileEncryptionKey, f.e.Source(), fileSize)
+				if err != nil {
+					file.Close()
+					return fmt.Errorf("failed to create decrypting stream reader: %w", err)
+				}
+				fileReader = seekReader
+			}
+
+			if f.pos > 0 {
+				_, err = fileReader.Seek(f.pos, io.SeekStart)
+				if err != nil {
+					fileReader.Close()
 					return fmt.Errorf("failed to seek inbound file: %w", err)
 				}
 			}
 
-			f.rsc = file
+			f.rsc = fileReader
 
 			if f.o.SpeedLimit > 0 {
 				bucket := ratelimit.NewBucketWithRate(float64(f.o.SpeedLimit), f.o.SpeedLimit)
@@ -611,6 +648,7 @@ func (f *entitySource) resetRequest() error {
 		return nil
 	}
 
+	// For remote files
 	expire := time.Now().Add(defaultUrlExpire)
 	u, err := f.Url(driver.WithForcePublicEndpoint(f.o.Ctx, false), WithNoInternalProxy(), WithExpire(&expire))
 	if err != nil {
@@ -628,7 +666,42 @@ func (f *entitySource) resetRequest() error {
 		return fmt.Errorf("failed to request download url: %w", resp.Err)
 	}
 
-	f.rsc = resp.Response.Body
+	// Check if we need to wrap with decryption for remote files
+	var bodyReader io.ReadCloser = resp.Response.Body
+	if conf.DecodedFileEncryptionKey != nil && len(conf.DecodedFileEncryptionKey) > 0 {
+		// Create a wrapper that implements ReadSeekCloser for the HTTP response body
+		wrapper := &httpBodySeekWrapper{
+			reader:   resp.Response.Body,
+			filePath: f.e.Source(),
+			fileSize: f.e.Size(),
+			position: f.pos,
+		}
+
+		// Wrap with decryption
+		decReader, err := rc4crypt.NewRC4StreamSeekReader(wrapper, conf.DecodedFileEncryptionKey, f.e.Source(), f.e.Size())
+		if err != nil {
+			resp.Response.Body.Close()
+			return fmt.Errorf("failed to create decrypting stream reader for remote file: %w", err)
+		}
+
+		// Seek to the current position in the decryption stream
+		if f.pos > 0 {
+			if _, err := decReader.Seek(f.pos, io.SeekStart); err != nil {
+				resp.Response.Body.Close()
+				return fmt.Errorf("failed to seek in decryption stream: %w", err)
+			}
+		}
+
+		bodyReader = decReader
+	}
+
+	if f.o.SpeedLimit > 0 {
+		bucket := ratelimit.NewBucketWithRate(float64(f.o.SpeedLimit), f.o.SpeedLimit)
+		f.rsc = lrs{bodyReader, ratelimit.Reader(bodyReader, bucket)}
+	} else {
+		f.rsc = bodyReader
+	}
+
 	return nil
 }
 
@@ -955,4 +1028,37 @@ func (r lrs) Read(p []byte) (int, error) {
 
 func (r lrs) Close() error {
 	return r.c.Close()
+}
+
+// httpBodySeekWrapper wraps an HTTP response body to provide a fake Seek interface
+// This is needed for RC4StreamSeekReader which expects a ReadSeekCloser
+type httpBodySeekWrapper struct {
+	reader   io.ReadCloser
+	filePath string
+	fileSize int64
+	position int64
+}
+
+func (w *httpBodySeekWrapper) Read(p []byte) (n int, err error) {
+	n, err = w.reader.Read(p)
+	w.position += int64(n)
+	return n, err
+}
+
+func (w *httpBodySeekWrapper) Seek(offset int64, whence int) (int64, error) {
+	// This is a fake seek - we can't actually seek in an HTTP response body
+	// The RC4StreamSeekReader will handle the actual decryption offset
+	switch whence {
+	case io.SeekStart:
+		w.position = offset
+	case io.SeekCurrent:
+		w.position += offset
+	case io.SeekEnd:
+		w.position = w.fileSize + offset
+	}
+	return w.position, nil
+}
+
+func (w *httpBodySeekWrapper) Close() error {
+	return w.reader.Close()
 }

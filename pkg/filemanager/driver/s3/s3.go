@@ -25,6 +25,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/mime"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/rc4crypt"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 	"github.com/samber/lo"
@@ -210,10 +211,20 @@ func (handler *Driver) Put(ctx context.Context, file *fs.UploadRequest) error {
 		handler.mime.TypeByName(file.Props.Uri.Name())
 	}
 
+	// Wrap with encryption if enabled
+	var uploadReader io.Reader = io.LimitReader(file, file.Props.Size)
+	if conf.DecodedFileEncryptionKey != nil && len(conf.DecodedFileEncryptionKey) > 0 {
+		encReader, err := rc4crypt.NewRC4Reader(uploadReader, file.Props.SavePath)
+		if err != nil {
+			return fmt.Errorf("failed to create encryption reader for S3 upload: %w", err)
+		}
+		uploadReader = encReader
+	}
+
 	_, err := uploader.UploadWithContext(ctx, &s3manager.UploadInput{
 		Bucket:      &handler.policy.BucketName,
 		Key:         &file.Props.SavePath,
-		Body:        io.LimitReader(file, file.Props.Size),
+		Body:        uploadReader,
 		ContentType: aws.String(mimeType),
 	})
 

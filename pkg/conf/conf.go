@@ -1,13 +1,15 @@
 package conf
 
 import (
+	"encoding/base64"
 	"fmt"
+	"os"
+	"strings"
+
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 	"github.com/go-ini/ini"
 	"github.com/go-playground/validator/v10"
-	"os"
-	"strings"
 )
 
 const (
@@ -85,6 +87,21 @@ func NewIniConfigProvider(configPath string, l logging.Logger) (ConfigProvider, 
 		provider.optionOverwrite[key.Name()] = key.Value()
 	}
 
+	// Decode FileEncryptionKey if provided
+	if provider.system.FileEncryptionKey != "" {
+		decodedKey, err := base64.StdEncoding.DecodeString(provider.system.FileEncryptionKey)
+		if err != nil {
+			l.Warning("Failed to decode FileEncryptionKey, encryption will be disabled: %s", err)
+			DecodedFileEncryptionKey = nil
+		} else {
+			DecodedFileEncryptionKey = decodedKey
+			l.Info("FileEncryptionKey loaded and decoded. Key length: %d", len(decodedKey))
+		}
+	} else {
+		DecodedFileEncryptionKey = nil
+		l.Info("FileEncryptionKey not provided, file encryption will be disabled.")
+	}
+
 	return provider, nil
 }
 
@@ -137,6 +154,7 @@ Mode = master
 Listen = :5212
 SessionSecret = {SessionSecret}
 HashIDSalt = {HashIDSalt}
+FileEncryptionKey = 
 `
 
 // mapSection 将配置文件的 Section 映射到结构体上

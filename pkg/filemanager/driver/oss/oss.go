@@ -27,6 +27,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/mime"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/rc4crypt"
 	"github.com/cloudreve/Cloudreve/v4/pkg/request"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
@@ -254,7 +255,16 @@ func (handler *Driver) Put(ctx context.Context, file *fs.UploadRequest) error {
 
 	// 小文件直接上传
 	if file.Props.Size < MultiPartUploadThreshold {
-		return handler.bucket.PutObject(file.Props.SavePath, file, options...)
+		// Wrap with encryption if enabled
+		var uploadReader io.Reader = file
+		if conf.DecodedFileEncryptionKey != nil && len(conf.DecodedFileEncryptionKey) > 0 {
+			encReader, err := rc4crypt.NewRC4Reader(uploadReader, file.Props.SavePath)
+			if err != nil {
+				return fmt.Errorf("failed to create encryption reader for OSS upload: %w", err)
+			}
+			uploadReader = encReader
+		}
+		return handler.bucket.PutObject(file.Props.SavePath, uploadReader, options...)
 	}
 
 	// 超过阈值时使用分片上传
@@ -271,6 +281,8 @@ func (handler *Driver) Put(ctx context.Context, file *fs.UploadRequest) error {
 	}, handler.settings.UseChunkBuffer(ctx), handler.l, handler.settings.TempPath(ctx))
 
 	uploadFunc := func(current *chunk.ChunkGroup, content io.Reader) error {
+		// Note: The chunk.ChunkGroup already handles proper positioning in the file,
+		// so the content reader is already at the correct position for encryption
 		part, err := handler.bucket.UploadPart(imur, content, current.Length(), current.Index()+1, oss.WithContext(ctx))
 		if err == nil {
 			parts = append(parts, part)

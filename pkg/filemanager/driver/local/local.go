@@ -16,6 +16,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/driver"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/rc4crypt"
 	"github.com/cloudreve/Cloudreve/v4/pkg/request"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
@@ -166,7 +167,17 @@ func (handler *Driver) Put(ctx context.Context, file *fs.UploadRequest) error {
 	}
 
 	// 写入文件内容
-	_, err = io.Copy(out, file)
+	// Check if encryption is enabled
+	finalOutputWriter := io.WriteCloser(out)
+	if conf.DecodedFileEncryptionKey != nil && len(conf.DecodedFileEncryptionKey) > 0 {
+		encryptingWriter, err := rc4crypt.NewRC4StreamWriter(out, conf.DecodedFileEncryptionKey, file.Props.SavePath)
+		if err != nil {
+			return fmt.Errorf("failed to create encryption writer for local storage: %w", err)
+		}
+		finalOutputWriter = encryptingWriter
+	}
+
+	_, err = io.Copy(finalOutputWriter, file)
 	return err
 }
 

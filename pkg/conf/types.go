@@ -35,14 +35,15 @@ var (
 
 // System 系统通用配置
 type System struct {
-	Mode          SysMode `validate:"eq=master|eq=slave"`
-	Listen        string  `validate:"required"`
-	Debug         bool
-	SessionSecret string
-	HashIDSalt    string // deprecated
-	GracePeriod   int    `validate:"gte=0"`
-	ProxyHeader   string `validate:"required_with=Listen"`
-	LogLevel      string `validate:"oneof=debug info warning error"`
+	Mode              SysMode `validate:"eq=master|eq=slave"`
+	Listen            string  `validate:"required"`
+	Debug             bool
+	SessionSecret     string
+	HashIDSalt        string // deprecated
+	GracePeriod       int    `validate:"gte=0"`
+	ProxyHeader       string `validate:"required_with=Listen"`
+	LogLevel          string `validate:"oneof=debug info warning error"`
+	FileEncryptionKey string `ini:"file_encryption_key" json:"file_encryption_key"`
 }
 
 type SSL struct {
@@ -136,3 +137,6 @@ var UnixConfig = &Unix{
 }
 
 var OptionOverwrite = map[string]interface{}{}
+
+// DecodedFileEncryptionKey stores the decoded file encryption key
+var DecodedFileEncryptionKey []byte

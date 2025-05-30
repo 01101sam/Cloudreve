@@ -24,6 +24,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/mime"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
+	"github.com/cloudreve/Cloudreve/v4/pkg/rc4crypt"
 	"github.com/cloudreve/Cloudreve/v4/pkg/request"
 	"github.com/cloudreve/Cloudreve/v4/pkg/serializer"
 	"github.com/cloudreve/Cloudreve/v4/pkg/setting"
@@ -258,7 +259,16 @@ func (handler *Driver) Put(ctx context.Context, file *fs.UploadRequest) error {
 
 	// 小文件直接上传
 	if file.Props.Size < MultiPartUploadThreshold {
-		_, err := handler.client.Object.Put(ctx, file.Props.SavePath, file, &cossdk.ObjectPutOptions{
+		// Wrap with encryption if enabled
+		var uploadReader io.Reader = file
+		if conf.DecodedFileEncryptionKey != nil && len(conf.DecodedFileEncryptionKey) > 0 {
+			encReader, err := rc4crypt.NewRC4Reader(uploadReader, file.Props.SavePath)
+			if err != nil {
+				return fmt.Errorf("failed to create encryption reader for COS upload: %w", err)
+			}
+			uploadReader = encReader
+		}
+		_, err := handler.client.Object.Put(ctx, file.Props.SavePath, uploadReader, &cossdk.ObjectPutOptions{
 			ObjectPutHeaderOptions: opt,
 		})
 		return err
