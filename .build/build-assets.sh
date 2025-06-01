@@ -5,9 +5,9 @@ export NODE_OPTIONS="--max-old-space-size=8192"
 # This script is used to build the assets for the application.
 cd assets
 rm -rf build
-yarn install --network-timeout 1000000
-yarn version --new-version $1 --no-git-tag-version
-yarn run build
+bun install
+bunx yarn version --new-version $1 --no-git-tag-version
+bun run build
 
 # Copy the build files to the application directory
 cd ../
