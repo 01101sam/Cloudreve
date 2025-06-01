@@ -268,25 +268,50 @@ func (handler *Driver) Delete(ctx context.Context, files ...string) ([]string, e
 				lastErr = err
 			}
 		} else {
-			// Invoke batch delete API
-			res, err := handler.svc.DeleteObjects(
+			// Try batch delete API first
+			res, err := handler.svc.DeleteObjectsWithContext(
+				ctx,
 				&s3.DeleteObjectsInput{
 					Bucket: &handler.policy.BucketName,
 					Delete: &s3.Delete{
 						Objects: lo.Map(group, func(s string, i int) *s3.ObjectIdentifier {
 							return &s3.ObjectIdentifier{Key: &s}
 						}),
+						Quiet: aws.Bool(false),
 					},
 				})
 
 			if err != nil {
-				failed = append(failed, group...)
-				lastErr = err
+				// Some S3-compatible vendors do not fully support multi-object delete and return a generic
+				// InvalidRequest (400) error. In this case, fall back to deleting objects one-by-one so that
+				// the recycle operation can still proceed for the majority of files.
+				handler.l.Warning("Batch delete failed, fallback to single delete: %s", err)
+
+				for _, key := range group {
+					_, err2 := handler.svc.DeleteObjectWithContext(ctx, &s3.DeleteObjectInput{
+						Bucket: &handler.policy.BucketName,
+						Key:    &key,
+					})
+
+					if err2 != nil {
+						if aerr, ok := err2.(awserr.Error); ok {
+							// Ignore if the object does not exist
+							if aerr.Code() == s3.ErrCodeNoSuchKey {
+								continue
+							}
+						}
+
+						failed = append(failed, key)
+						lastErr = err2
+					}
+				}
+
+				// Move on to next group after fallback attempts
 				continue
 			}
 
 			for _, v := range res.Errors {
-				handler.l.Debug("Failed to delete file: %s, Code:%s, Message:%s", v.Key, v.Code, v.Key)
+				handler.l.Debug("Failed to delete file: %s, Code:%s, Message:%s", v.Key, v.Code, v.Message)
 				failed = append(failed, *v.Key)
 			}
 		}
