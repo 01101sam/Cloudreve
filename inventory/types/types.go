@@ -14,6 +14,11 @@ type (
 		VersionRetentionMax int         `json:"version_retention_max,omitempty"`
 		Pined               []PinedFile `json:"pined,omitempty"`
 		Language            string      `json:"email_language,omitempty"`
+		// View preferences
+		DefaultViewMode  string            `json:"default_view_mode,omitempty"`  // grid, list, etc.
+		DefaultSortBy    string            `json:"default_sort_by,omitempty"`    // name, size, date, etc.
+		DefaultSortOrder string            `json:"default_sort_order,omitempty"` // asc, desc
+		ViewPreferences  map[string]string `json:"view_preferences,omitempty"`   // Additional view settings
 	}
 
 	PinedFile struct {
@@ -149,6 +154,18 @@ type (
 	PolicyType string
 
 	FileProps struct {
+		ViewPreferences *ViewPreferences `json:"view_preferences,omitempty"`
+	}
+
+	// ViewPreferences stores folder-specific view settings
+	ViewPreferences struct {
+		ViewMode       string            `json:"view_mode,omitempty"`       // grid, list, etc.
+		SortBy         string            `json:"sort_by,omitempty"`         // name, size, date, etc.
+		SortOrder      string            `json:"sort_order,omitempty"`      // asc, desc
+		ShowThumb      bool              `json:"show_thumb,omitempty"`      // Show thumbnails in grid view
+		Columns        []string          `json:"columns,omitempty"`         // Visible columns in list view
+		InheritFrom    int               `json:"inherit_from,omitempty"`    // ID of parent folder to inherit from
+		CustomSettings map[string]string `json:"custom_settings,omitempty"` // Additional custom settings
 	}
 )
 
