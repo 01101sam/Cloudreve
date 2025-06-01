@@ -8,6 +8,7 @@ require (
 	github.com/aliyun/aliyun-oss-go-sdk v3.0.2+incompatible
 	github.com/aws/aws-sdk-go v1.31.5
 	github.com/cloudflare/cfssl v1.6.1
+	github.com/cristalhq/natsort v0.1.1
 	github.com/dhowden/tag v0.0.0-20230630033851-978a0926ee25
 	github.com/dsoprea/go-exif/v3 v3.0.1
 	github.com/dsoprea/go-heic-exif-extractor v0.0.0-20210512044107-62067e44c235

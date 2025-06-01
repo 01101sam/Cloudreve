@@ -656,7 +656,19 @@ func (f *entitySource) resetRequest() error {
 	}
 
 	h := http.Header{}
-	h.Set("Range", fmt.Sprintf("bytes=%d-", f.pos))
+
+	// When decryption is enabled, we need to download from the beginning
+	// to properly initialize the RC4 cipher state
+	startPos := f.pos
+	if conf.DecodedFileEncryptionKey != nil && len(conf.DecodedFileEncryptionKey) > 0 {
+		// Always start from beginning for encrypted files
+		startPos = 0
+	}
+
+	if startPos > 0 {
+		h.Set("Range", fmt.Sprintf("bytes=%d-", startPos))
+	}
+
 	resp := f.c.Request(http.MethodGet, u.Url, nil,
 		request.WithContext(f.o.Ctx),
 		request.WithLogger(f.l),
@@ -674,7 +686,7 @@ func (f *entitySource) resetRequest() error {
 			reader:   resp.Response.Body,
 			filePath: f.e.Source(),
 			fileSize: f.e.Size(),
-			position: f.pos,
+			position: 0, // We always start from 0 for encrypted files
 		}
 
 		// Wrap with decryption
@@ -684,7 +696,7 @@ func (f *entitySource) resetRequest() error {
 			return fmt.Errorf("failed to create decrypting stream reader for remote file: %w", err)
 		}
 
-		// Seek to the current position in the decryption stream
+		// If we need to seek to a position, do it now in the decryption stream
 		if f.pos > 0 {
 			if _, err := decReader.Seek(f.pos, io.SeekStart); err != nil {
 				resp.Response.Body.Close()
