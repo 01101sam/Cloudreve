@@ -1,7 +1,7 @@
 package model
 
 import (
-	"github.com/jinzhu/gorm"
+	"gorm.io/gorm"
 )
 
 const (
@@ -31,8 +31,8 @@ type User struct {
 	Authn     string `gorm:"size:4294967295"`
 
 	// 关联模型
-	Group  Group  `gorm:"save_associations:false:false"`
-	Policy Policy `gorm:"PRELOAD:false,association_autoupdate:false"`
+	Group  Group `gorm:"save_associations:false:false"`
+	Policy Policy
 
 	// 数据库忽略字段
 	OptionsSerialized UserOption `gorm:"-"`

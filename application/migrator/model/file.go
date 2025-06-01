@@ -1,25 +1,25 @@
 package model
 
 import (
-	"github.com/jinzhu/gorm"
+	"gorm.io/gorm"
 )
 
 // File 文件
 type File struct {
 	// 表字段
 	gorm.Model
-	Name            string `gorm:"unique_index:idx_only_one"`
+	Name            string `gorm:"uniqueIndex:idx_only_one"`
 	SourceName      string `gorm:"type:text"`
-	UserID          uint   `gorm:"index:user_id;unique_index:idx_only_one"`
+	UserID          uint   `gorm:"index:user_id;uniqueIndex:idx_only_one"`
 	Size            uint64
 	PicInfo         string
-	FolderID        uint `gorm:"index:folder_id;unique_index:idx_only_one"`
+	FolderID        uint `gorm:"index:folder_id;uniqueIndex:idx_only_one"`
 	PolicyID        uint
-	UploadSessionID *string `gorm:"index:session_id;unique_index:session_only_one"`
+	UploadSessionID *string `gorm:"index:session_id;uniqueIndex:session_only_one"`
 	Metadata        string  `gorm:"type:text"`
 
 	// 关联模型
-	Policy Policy `gorm:"PRELOAD:false,association_autoupdate:false"`
+	Policy Policy
 
 	// 数据库忽略字段
 	Position           string            `gorm:"-"`

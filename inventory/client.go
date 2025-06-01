@@ -70,7 +70,7 @@ func NewRawEntClient(l logging.Logger, config conf.ConfigProvider) (*ent.Client,
 	case conf.SQLiteDB:
 		dbFile := util.RelativePath(dbConfig.DBFile)
 		l.Info("Connect to SQLite database %q.", dbFile)
-		client, err = sql.Open("sqlite3", util.RelativePath(dbConfig.DBFile))
+		client, err = sql.Open("sqlite3", util.RelativePath(dbConfig.DBFile)+"?_fk=1")
 	case conf.PostgresDB:
 		l.Info("Connect to Postgres database %q.", dbConfig.Host)
 		client, err = sql.Open("postgres", fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=disable",
@@ -151,6 +151,14 @@ func (d sqlite3Driver) Open(name string) (conn driver.Conn, err error) {
 }
 
 func init() {
+	// Check if sqlite3 driver is already registered
+	drivers := rawsql.Drivers()
+	for _, driver := range drivers {
+		if driver == "sqlite3" {
+			// Driver already registered, skip registration
+			return
+		}
+	}
 	rawsql.Register("sqlite3", sqlite3Driver{Driver: &sqlite.Driver{}})
 }
 

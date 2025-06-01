@@ -4,13 +4,16 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jinzhu/gorm"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
+	"gorm.io/driver/sqlite"
+	"gorm.io/driver/sqlserver"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+	"gorm.io/gorm/schema"
 
 	"github.com/cloudreve/Cloudreve/v4/application/migrator/conf"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
-	_ "github.com/jinzhu/gorm/dialects/mssql"
-	_ "github.com/jinzhu/gorm/dialects/mysql"
-	_ "github.com/jinzhu/gorm/dialects/postgres"
 )
 
 // DB 数据库链接单例
@@ -29,18 +32,27 @@ func Init() error {
 		confDBType = "sqlite"
 	}
 
+	// Configure GORM v2 with table prefix and logger
+	gormConfig := &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Info), // Debug mode
+		NamingStrategy: schema.NamingStrategy{
+			TablePrefix: conf.DatabaseConfig.TablePrefix,
+		},
+	}
+
 	switch confDBType {
 	case "UNSET", "sqlite":
 		// 未指定数据库或者明确指定为 sqlite 时，使用 SQLite 数据库
-		db, err = gorm.Open("sqlite3", util.RelativePath(conf.DatabaseConfig.DBFile))
+		db, err = gorm.Open(sqlite.Open(util.RelativePath(conf.DatabaseConfig.DBFile)), gormConfig)
 	case "postgres":
-		db, err = gorm.Open(confDBType, fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=disable",
+		dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=disable",
 			conf.DatabaseConfig.Host,
 			conf.DatabaseConfig.User,
 			conf.DatabaseConfig.Password,
 			conf.DatabaseConfig.Name,
-			conf.DatabaseConfig.Port))
-	case "mysql", "mssql":
+			conf.DatabaseConfig.Port)
+		db, err = gorm.Open(postgres.Open(dsn), gormConfig)
+	case "mysql":
 		var host string
 		if conf.DatabaseConfig.UnixSocket {
 			host = fmt.Sprintf("unix(%s)",
@@ -51,39 +63,45 @@ func Init() error {
 				conf.DatabaseConfig.Port)
 		}
 
-		db, err = gorm.Open(confDBType, fmt.Sprintf("%s:%s@%s/%s?charset=%s&parseTime=True&loc=Local",
+		dsn := fmt.Sprintf("%s:%s@%s/%s?charset=%s&parseTime=True&loc=Local",
 			conf.DatabaseConfig.User,
 			conf.DatabaseConfig.Password,
 			host,
 			conf.DatabaseConfig.Name,
-			conf.DatabaseConfig.Charset))
+			conf.DatabaseConfig.Charset)
+		db, err = gorm.Open(mysql.Open(dsn), gormConfig)
+	case "mssql":
+		dsn := fmt.Sprintf("sqlserver://%s:%s@%s:%d?database=%s",
+			conf.DatabaseConfig.User,
+			conf.DatabaseConfig.Password,
+			conf.DatabaseConfig.Host,
+			conf.DatabaseConfig.Port,
+			conf.DatabaseConfig.Name)
+		db, err = gorm.Open(sqlserver.Open(dsn), gormConfig)
 	default:
 		return fmt.Errorf("unsupported database type %q", confDBType)
 	}
 
-	//db.SetLogger(util.Log())
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	// 处理表前缀
-	gorm.DefaultTableNameHandler = func(db *gorm.DB, defaultTableName string) string {
-		return conf.DatabaseConfig.TablePrefix + defaultTableName
+	// Get underlying SQL database to configure connection pool
+	sqlDB, err := db.DB()
+	if err != nil {
+		return fmt.Errorf("failed to get database connection: %w", err)
 	}
 
-	// Debug模式下，输出所有 SQL 日志
-	db.LogMode(true)
-
 	//设置连接池
-	db.DB().SetMaxIdleConns(50)
+	sqlDB.SetMaxIdleConns(50)
 	if confDBType == "sqlite" || confDBType == "UNSET" {
-		db.DB().SetMaxOpenConns(1)
+		sqlDB.SetMaxOpenConns(1)
 	} else {
-		db.DB().SetMaxOpenConns(100)
+		sqlDB.SetMaxOpenConns(100)
 	}
 
 	//超时
-	db.DB().SetConnMaxLifetime(time.Second * 30)
+	sqlDB.SetConnMaxLifetime(time.Second * 30)
 
 	DB = db
 

@@ -3,7 +3,7 @@ package model
 import (
 	"time"
 
-	"github.com/jinzhu/gorm"
+	"gorm.io/gorm"
 )
 
 // Share 分享模型
@@ -20,8 +20,8 @@ type Share struct {
 	PreviewEnabled  bool       // 是否允许直接预览
 	SourceName      string     `gorm:"index:source"` // 用于搜索的字段
 
-	// 数据库忽略字段
-	User   User   `gorm:"PRELOAD:false,association_autoupdate:false"`
-	File   File   `gorm:"PRELOAD:false,association_autoupdate:false"`
-	Folder Folder `gorm:"PRELOAD:false,association_autoupdate:false"`
+	// 关联模型
+	User   User
+	File   File
+	Folder Folder
 }
