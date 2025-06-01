@@ -45,7 +45,7 @@ func Init() error {
 		// 未指定数据库或者明确指定为 sqlite 时，使用 SQLite 数据库
 		db, err = gorm.Open(sqlite.Open(util.RelativePath(conf.DatabaseConfig.DBFile)), gormConfig)
 	case "postgres":
-		dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=disable",
+		dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=perfer",
 			conf.DatabaseConfig.Host,
 			conf.DatabaseConfig.User,
 			conf.DatabaseConfig.Password,

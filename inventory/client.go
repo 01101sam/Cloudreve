@@ -6,8 +6,10 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
+	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql"
 	"github.com/cloudreve/Cloudreve/v4/application/constants"
 	"github.com/cloudreve/Cloudreve/v4/ent"
@@ -25,6 +27,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
+	_ "github.com/microsoft/go-mssqldb"
 	"modernc.org/sqlite"
 )
 
@@ -36,12 +39,19 @@ const (
 
 // InitializeDBClient runs migration and returns a new ent.Client with additional configurations
 // for hooks and interceptors.
-func InitializeDBClient(l logging.Logger,
+func InitializeDBClient(l logging.Logger, config conf.ConfigProvider,
 	client *ent.Client, kv cache.Driver, requiredDbVersion string) (*ent.Client, error) {
 	ctx := context.WithValue(context.Background(), logging.LoggerCtx{}, l)
+
+	// Determine whether automatic migration should be skipped. We skip when:
+	//   1) The user explicitly disables it in the config, or
+	//   2) The selected database engine is SQL Server, which Ent cannot migrate.
+	dbCfg := config.Database()
+	skipSchema := dbCfg.DisableAutoMigration || dbCfg.Type == conf.MsSqlDB
+
 	if needMigration(client, ctx, requiredDbVersion) {
 		// Run the auto migration tool.
-		if err := migrate(l, client, ctx, kv, requiredDbVersion); err != nil {
+		if err := migrate(l, client, ctx, kv, requiredDbVersion, skipSchema, dbCfg.Type); err != nil {
 			return nil, fmt.Errorf("failed to migrate database: %w", err)
 		}
 	} else {
@@ -79,24 +89,51 @@ func NewRawEntClient(l logging.Logger, config conf.ConfigProvider) (*ent.Client,
 			dbConfig.Password,
 			dbConfig.Name,
 			dbConfig.Port))
-	case conf.MySqlDB, conf.MsSqlDB:
-		l.Info("Connect to MySQL/SQLServer database %q.", dbConfig.Host)
+	case conf.MySqlDB:
+		l.Info("Connect to MySQL database %q.", dbConfig.Host)
 		var host string
 		if dbConfig.UnixSocket {
-			host = fmt.Sprintf("unix(%s)",
-				dbConfig.Host)
+			host = fmt.Sprintf("unix(%s)", dbConfig.Host)
 		} else {
-			host = fmt.Sprintf("(%s:%d)",
-				dbConfig.Host,
-				dbConfig.Port)
+			host = fmt.Sprintf("(%s:%d)", dbConfig.Host, dbConfig.Port)
 		}
 
-		client, err = sql.Open(string(confDBType), fmt.Sprintf("%s:%s@%s/%s?charset=%s&parseTime=True&loc=Local",
+		client, err = sql.Open("mysql", fmt.Sprintf("%s:%s@%s/%s?charset=%s&parseTime=True&loc=Local",
 			dbConfig.User,
 			dbConfig.Password,
 			host,
 			dbConfig.Name,
 			dbConfig.Charset))
+
+	case conf.MsSqlDB:
+		l.Info("Connect to SQL Server database %q.", dbConfig.Host)
+
+		sslMode := strings.ToLower(dbConfig.SSL)
+		if sslMode == "" {
+			sslMode = "prefer"
+		}
+
+		var encryptParam string
+		switch sslMode {
+		case "disable":
+			encryptParam = "disable"
+		case "require":
+			encryptParam = "true"
+		default: // prefer
+			encryptParam = "false"
+		}
+
+		// Always disable server certificate verification when SSL is in use to
+		// simplify deployment in environments with self-signed certificates.
+		// See https://github.com/microsoft/go-mssqldb#connection-parameters
+		connStr := fmt.Sprintf("sqlserver://%s:%s@%s:%d?database=%s&encrypt=%s&trustservercertificate=false&charset=utf8",
+			dbConfig.User,
+			dbConfig.Password,
+			dbConfig.Host,
+			dbConfig.Port,
+			dbConfig.Name,
+			encryptParam)
+		client, err = sql.Open("sqlserver", connStr)
 	default:
 		return nil, fmt.Errorf("unsupported database type %q", confDBType)
 	}
@@ -117,16 +154,21 @@ func NewRawEntClient(l logging.Logger, config conf.ConfigProvider) (*ent.Client,
 	// Set timeout
 	db.SetConnMaxLifetime(time.Second * 30)
 
-	driverOpt := ent.Driver(client)
+	// Wrap the raw driver with a quoting-fix for SQL Server so that ent's
+	// back-tick quoted identifiers are converted to square brackets.
+	var drv dialect.Driver = client
+	drv = debug.WrapMSSQLQuoteFix(drv)
 
-	// Enable verbose logging for debug mode.
+	// Enable verbose logging for debug mode after applying all other wrappers
+	// so that the final SQL emitted to the database is what gets printed.
 	if config.System().Debug {
 		l.Debug("Debug mode is enabled for DB client.")
-		driverOpt = ent.Driver(debug.DebugWithContext(client, func(ctx context.Context, i ...any) {
+		drv = debug.DebugWithContext(drv, func(ctx context.Context, i ...any) {
 			logging.FromContext(ctx).Debug(i[0].(string), i[1:]...)
-		}))
+		})
 	}
 
+	driverOpt := ent.Driver(drv)
 	return ent.NewClient(driverOpt), nil
 }
 
@@ -168,11 +210,23 @@ func needMigration(client *ent.Client, ctx context.Context, requiredDbVersion st
 	return c == 0
 }
 
-func migrate(l logging.Logger, client *ent.Client, ctx context.Context, kv cache.Driver, requiredDbVersion string) error {
+func migrate(l logging.Logger, client *ent.Client, ctx context.Context, kv cache.Driver, requiredDbVersion string, skipSchema bool, dbType conf.DBType) error {
 	l.Info("Start initializing database schema...")
-	l.Info("Creating basic table schema...")
-	if err := client.Schema.Create(ctx); err != nil {
-		return fmt.Errorf("Failed creating schema resources: %w", err)
+	if !skipSchema {
+		l.Info("Creating basic table schema...")
+		if err := client.Schema.Create(ctx); err != nil {
+			return fmt.Errorf("Failed creating schema resources: %w", err)
+		}
+	} else {
+		if dbType == conf.MsSqlDB {
+			l.Info("Automatic migration disabled – applying bundled SQL Server schema script...")
+			scriptPath := util.RelativePath("sql/sqlserver_schema.sql")
+			if err := executeSQLScriptFile(ctx, client, scriptPath, l); err != nil {
+				return err
+			}
+		} else {
+			l.Info("Skip creating table schema because automatic migration is disabled.")
+		}
 	}
 
 	migrateDefaultSettings(l, client, ctx, kv)
@@ -459,4 +513,46 @@ func createMockData(client *ent.Client, ctx context.Context) {
 	for i := 0; i < 255; i++ {
 		fmt.Printf("%d/", i)
 	}
+}
+
+// executeSQLScriptFile executes the SQL commands contained in the given file.
+// It understands "GO" batch separators (case-insensitive, trimmed) which are
+// commonly used in Microsoft SQL Server scripts.
+func executeSQLScriptFile(ctx context.Context, client *ent.Client, path string, l logging.Logger) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("failed to read schema script: %w", err)
+	}
+
+	lines := strings.Split(string(content), "\n")
+	var chunk strings.Builder
+	execChunk := func(lineNo int) error {
+		stmt := strings.TrimSpace(chunk.String())
+		if stmt == "" {
+			return nil
+		}
+		if _, err := client.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("error executing SQL chunk ending at line %d: %w", lineNo, err)
+		}
+		chunk.Reset()
+		return nil
+	}
+
+	for i, line := range lines {
+		if strings.EqualFold(strings.TrimSpace(line), "GO") {
+			if err := execChunk(i + 1); err != nil {
+				return err
+			}
+			continue
+		}
+		chunk.WriteString(line)
+		chunk.WriteString("\n")
+	}
+	// execute any trailing chunk
+	if err := execChunk(len(lines)); err != nil {
+		return err
+	}
+
+	l.Info("SQL Server schema script applied successfully.")
+	return nil
 }

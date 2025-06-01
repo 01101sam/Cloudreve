@@ -134,10 +134,22 @@ func (c *storagePolicyClient) Upsert(ctx context.Context, policy *ent.StoragePol
 }
 
 func (c *storagePolicyClient) GetByGroup(ctx context.Context, group *ent.Group) (*ent.StoragePolicy, error) {
+	// MSSQL does not accept the SELECT TOP 1 DISTINCT construct that Ent emits when
+	// both a LIMIT (Top) and DISTINCT are present in the same statement. The
+	// workaround is to disable the DISTINCT clause entirely because we only
+	// expect at most one row for the given group (it is a many-to-one
+	// relationship via the storage_policy_id foreign-key). This mirrors the fix
+	// applied in inventory/file.go::Root for the same issue.
+
 	val, skipCache := ctx.Value(SkipStoragePolicyCache{}).(bool)
 	skipCache = skipCache && val
 
-	res, err := withStoragePolicyEagerLoading(ctx, c.client.Group.QueryStoragePolicies(group)).WithNode().First(ctx)
+	query := withStoragePolicyEagerLoading(ctx, c.client.Group.QueryStoragePolicies(group)).WithNode()
+	// Avoid DISTINCT so that the generated SQL is "SELECT TOP 1 ..." instead of
+	// the invalid "SELECT TOP 1 DISTINCT ..." on SQL Server.
+	query.Unique(false)
+
+	res, err := query.First(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get storage policies: %w", err)
 	}

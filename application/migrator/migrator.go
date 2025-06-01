@@ -13,6 +13,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v4/application/migrator/model"
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
+	pkgconf "github.com/cloudreve/Cloudreve/v4/pkg/conf"
 	"github.com/cloudreve/Cloudreve/v4/pkg/logging"
 	"github.com/cloudreve/Cloudreve/v4/pkg/util"
 )
@@ -180,9 +181,14 @@ func (m *Migrator) updateStep(step int) error {
 func (m *Migrator) Migrate() error {
 	// Continue from the current step
 	if m.state.Step <= StepSchema {
-		m.l.Info("Creating basic v4 table schema...")
-		if err := m.v4client.Schema.Create(context.Background()); err != nil {
-			return fmt.Errorf("failed creating schema resources: %w", err)
+		dbCfg := m.dep.ConfigProvider().Database()
+		if dbCfg.Type != pkgconf.MsSqlDB && !dbCfg.DisableAutoMigration {
+			m.l.Info("Creating basic v4 table schema...")
+			if err := m.v4client.Schema.Create(context.Background()); err != nil {
+				return fmt.Errorf("failed creating schema resources: %w", err)
+			}
+		} else {
+			m.l.Info("Skip v4 schema creation because automatic migration is disabled or database is SQL Server.")
 		}
 		if err := m.updateStep(StepSettings); err != nil {
 			return fmt.Errorf("failed to update step: %w", err)

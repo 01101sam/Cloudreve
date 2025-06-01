@@ -310,7 +310,7 @@ func (d *dependency) DBClient() *ent.Client {
 		proSuffix = "-pro"
 	}
 
-	client, err := inventory.InitializeDBClient(d.Logger(), d.rawEntClient, d.KV(), d.requiredDbVersion+proSuffix)
+	client, err := inventory.InitializeDBClient(d.Logger(), d.ConfigProvider(), d.rawEntClient, d.KV(), d.requiredDbVersion+proSuffix)
 	if err != nil {
 		d.panicError(err)
 	}
