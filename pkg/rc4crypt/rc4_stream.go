@@ -177,6 +177,30 @@ func (w *RC4StreamWriter) Close() error {
 	return w.underlyingWriter.Close()
 }
 
+// Discard advances the cipher state by n bytes without producing any output.
+// This is useful when appending to an already encrypted file at an offset
+// other than zero so that the RC4 keystream remains aligned with the
+// existing ciphertext.
+func (w *RC4StreamWriter) Discard(n int64) {
+	if w.cipher == nil || n <= 0 {
+		return // Passthrough mode or nothing to discard
+	}
+
+	// Reuse a small fixed buffer to fast-forward the cipher.
+	buf := make([]byte, 4096)
+	remaining := n
+	for remaining > 0 {
+		chunk := int64(len(buf))
+		if remaining < chunk {
+			chunk = remaining
+		}
+
+		// XORKeyStream advances the cipher state even when src == dst.
+		w.cipher.XORKeyStream(buf[:chunk], buf[:chunk])
+		remaining -= chunk
+	}
+}
+
 // rc4Reader wraps an io.Reader with RC4 decryption
 type rc4Reader struct {
 	cipher *rc4.Cipher

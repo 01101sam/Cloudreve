@@ -9,10 +9,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
+	"path"
+	"strings"
+	"time"
+
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
 	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
+	"github.com/cloudreve/Cloudreve/v4/pkg/conf"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/lock"
@@ -26,11 +33,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 	"golang.org/x/tools/container/intsets"
-	"net/http"
-	"net/url"
-	"path"
-	"strings"
-	"time"
 )
 
 const (
@@ -344,6 +346,12 @@ func handleGetHeadPost(c *gin.Context, user *ent.User, fm manager.FileManager) (
 	if es.ShouldInternalProxy() ||
 		(user.Edges.DavAccounts[0].Options.Enabled(int(types.DavAccountProxy)) &&
 			user.Edges.Group.Permissions.Enabled(int(types.GroupPermissionWebDAVProxy))) {
+
+		// If encryption is enabled, set header to prevent gzip middleware from compressing
+		if conf.DecodedFileEncryptionKey != nil && len(conf.DecodedFileEncryptionKey) > 0 {
+			c.Writer.Header().Set("Content-Encoding", "none")
+		}
+
 		es.Serve(c.Writer, c.Request)
 	} else {
 		settings := dependency.FromContext(c).SettingProvider()

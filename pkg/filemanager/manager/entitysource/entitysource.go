@@ -69,6 +69,9 @@ type EntitySource interface {
 	CloneToLocalSrc(t types.EntityType, src string) (EntitySource, error)
 	// ShouldInternalProxy returns true if the source will/should be proxied by internal proxy.
 	ShouldInternalProxy(opts ...EntitySourceOption) bool
+	// ActualSize returns the actual size of the entity after decryption (if applicable).
+	// For encrypted files, this may differ from the stored size.
+	ActualSize() int64
 }
 
 type EntitySourceOption interface {
@@ -224,6 +227,14 @@ func (f *entitySource) Entity() fs.Entity {
 	return f.e
 }
 
+// ActualSize returns the actual size of the entity after decryption (if applicable).
+// For encrypted files, this may differ from the stored size.
+func (f *entitySource) ActualSize() int64 {
+	// RC4 is a stream cipher that doesn't change the size of the data
+	// The size should remain the same after encryption/decryption
+	return f.e.Size()
+}
+
 func (f *entitySource) IsLocal() bool {
 	return f.handler.Capabilities().StaticFeatures.Enabled(int(driver.HandlerCapabilityInboundGet))
 }
@@ -232,9 +243,46 @@ func (f *entitySource) LocalPath(ctx context.Context) string {
 	return f.handler.LocalPath(ctx, f.e.Source())
 }
 
+// noCompressResponseWriter wraps http.ResponseWriter to prevent gzip compression
+type noCompressResponseWriter struct {
+	http.ResponseWriter
+	headerWritten bool
+}
+
+func (w *noCompressResponseWriter) WriteHeader(code int) {
+	if !w.headerWritten {
+		w.headerWritten = true
+		// Keep the fake Content-Encoding to prevent gzip middleware from compressing
+		// Most gzip middleware will check this before deciding to compress
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *noCompressResponseWriter) Write(b []byte) (int, error) {
+	if !w.headerWritten {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+// Flush implements http.Flusher
+func (w *noCompressResponseWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 func (f *entitySource) Serve(w http.ResponseWriter, r *http.Request, opts ...EntitySourceOption) {
 	for _, opt := range opts {
 		opt.Apply(f.o)
+	}
+
+	// For encrypted files, wrap the response writer to prevent gzip middleware compression
+	if conf.DecodedFileEncryptionKey != nil && len(conf.DecodedFileEncryptionKey) > 0 {
+		// Set a fake gzip header to make the gzip middleware skip compression
+		// We use a non-standard encoding that gzip middleware will skip
+		w.Header().Set("Content-Encoding", "none")
+		w = &noCompressResponseWriter{ResponseWriter: w}
 	}
 
 	if f.IsLocal() {
@@ -444,9 +492,8 @@ func (f *entitySource) Serve(w http.ResponseWriter, r *http.Request, opts ...Ent
 	}
 
 	w.Header().Set("Accept-Ranges", "bytes")
-	if w.Header().Get("Content-Encoding") == "" {
-		w.Header().Set("Content-Length", strconv.FormatInt(sendSize, 10))
-	}
+	// Always set Content-Length for uncompressed content
+	w.Header().Set("Content-Length", strconv.FormatInt(sendSize, 10))
 
 	w.WriteHeader(code)
 
@@ -656,6 +703,8 @@ func (f *entitySource) resetRequest() error {
 	}
 
 	h := http.Header{}
+	// Explicitly request no compression to avoid dealing with compressed content
+	h.Set("Accept-Encoding", "identity")
 
 	// When decryption is enabled, we need to download from the beginning
 	// to properly initialize the RC4 cipher state
@@ -676,6 +725,15 @@ func (f *entitySource) resetRequest() error {
 	).CheckHTTPResponse(http.StatusOK, http.StatusPartialContent)
 	if resp.Err != nil {
 		return fmt.Errorf("failed to request download url: %w", resp.Err)
+	}
+
+	// Check if the response is compressed despite our request
+	contentEncoding := resp.Response.Header.Get("Content-Encoding")
+	if contentEncoding != "" && contentEncoding != "identity" {
+		// This shouldn't happen if the server respects our Accept-Encoding header
+		// But if it does, we need to handle it
+		resp.Response.Body.Close()
+		return fmt.Errorf("remote storage returned compressed content (%s) which is not supported for encrypted files", contentEncoding)
 	}
 
 	// Check if we need to wrap with decryption for remote files

@@ -174,6 +174,13 @@ func (handler *Driver) Put(ctx context.Context, file *fs.UploadRequest) error {
 		if err != nil {
 			return fmt.Errorf("failed to create encryption writer for local storage: %w", err)
 		}
+
+		// If we are resuming an upload (Offset > 0), advance the cipher so the
+		// keystream aligns with the current offset.
+		if file.Offset > 0 {
+			encryptingWriter.Discard(file.Offset)
+		}
+
 		finalOutputWriter = encryptingWriter
 	}
 
