@@ -277,14 +277,6 @@ func (f *entitySource) Serve(w http.ResponseWriter, r *http.Request, opts ...Ent
 		opt.Apply(f.o)
 	}
 
-	// For encrypted files, wrap the response writer to prevent gzip middleware compression
-	if conf.DecodedFileEncryptionKey != nil && len(conf.DecodedFileEncryptionKey) > 0 {
-		// Set a fake gzip header to make the gzip middleware skip compression
-		// We use a non-standard encoding that gzip middleware will skip
-		w.Header().Set("Content-Encoding", "none")
-		w = &noCompressResponseWriter{ResponseWriter: w}
-	}
-
 	if f.IsLocal() {
 		// For local files, validate file existence by resetting rsc
 		if err := f.resetRequest(); err != nil {
@@ -492,8 +484,11 @@ func (f *entitySource) Serve(w http.ResponseWriter, r *http.Request, opts ...Ent
 	}
 
 	w.Header().Set("Accept-Ranges", "bytes")
-	// Always set Content-Length for uncompressed content
-	w.Header().Set("Content-Length", strconv.FormatInt(sendSize, 10))
+
+	// Set Content-Length only if the client is not asking for on-the-fly gzip compression.
+	if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		w.Header().Set("Content-Length", strconv.FormatInt(sendSize, 10))
+	}
 
 	w.WriteHeader(code)
 

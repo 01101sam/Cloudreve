@@ -207,14 +207,9 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 		静态资源
 	*/
 
-	// Only apply gzip middleware if encryption is NOT enabled
-	// When encryption is enabled, gzip compression causes issues with range requests
-	if conf.DecodedFileEncryptionKey == nil || len(conf.DecodedFileEncryptionKey) == 0 {
-		r.Use(gzip.Gzip(gzip.DefaultCompression)) // Done
-	} else {
-		// Log that gzip is disabled due to encryption
-		dep.Logger().Info("Gzip compression disabled due to file encryption being enabled")
-	}
+	// Always apply gzip middleware to compress responses on-the-fly.
+	// The encryption pipeline has been fixed to work correctly with streaming compression.
+	r.Use(gzip.Gzip(gzip.DefaultCompression))
 
 	r.Use(middleware.FrontendFileHandler(dep))   // Done
 	r.GET("manifest.json", controllers.Manifest) // Done
