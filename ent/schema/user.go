@@ -52,6 +52,7 @@ func (User) Edges() []ent.Edge {
 		edge.To("passkey", Passkey.Type),
 		edge.To("tasks", Task.Type),
 		edge.To("entities", Entity.Type),
+		edge.To("view_preferences", ViewPreference.Type),
 	}
 }
 

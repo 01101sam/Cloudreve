@@ -14,6 +14,7 @@ type (
 		VersionRetentionMax int         `json:"version_retention_max,omitempty"`
 		Pined               []PinedFile `json:"pined,omitempty"`
 		Language            string      `json:"email_language,omitempty"`
+		SyncViewPreferences bool        `json:"sync_view_preferences,omitempty"`
 	}
 
 	PinedFile struct {

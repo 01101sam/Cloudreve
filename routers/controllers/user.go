@@ -407,3 +407,31 @@ func ListPublicShare(c *gin.Context) {
 		})
 	}
 }
+
+// GetViewPreference retrieves view preferences for a folder
+func GetViewPreference(c *gin.Context) {
+	service := ParametersFromContext[*user.GetViewPreferenceService](c, user.GetViewPreferenceParamCtx{})
+	res, err := service.Get(c)
+	if err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		c.Abort()
+		return
+	}
+
+	c.JSON(200, serializer.Response{
+		Data: res,
+	})
+}
+
+// SetViewPreference updates view preferences for a folder
+func SetViewPreference(c *gin.Context) {
+	service := ParametersFromContext[*user.SetViewPreferenceService](c, user.SetViewPreferenceParamCtx{})
+	err := service.Set(c)
+	if err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		c.Abort()
+		return
+	}
+
+	c.JSON(200, serializer.Response{})
+}

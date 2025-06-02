@@ -1107,6 +1107,16 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 					)
 					// 获得二步验证初始化信息
 					setting.GET("2fa", controllers.UserInit2FA)
+
+					// View preferences
+					setting.POST("view-preference",
+						controllers.FromJSON[usersvc.GetViewPreferenceService](usersvc.GetViewPreferenceParamCtx{}),
+						controllers.GetViewPreference,
+					)
+					setting.PUT("view-preference",
+						controllers.FromJSON[usersvc.SetViewPreferenceService](usersvc.SetViewPreferenceParamCtx{}),
+						controllers.SetViewPreference,
+					)
 				}
 			}
 
