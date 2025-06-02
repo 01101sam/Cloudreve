@@ -28,6 +28,7 @@ type UserSettings struct {
 	Paswordless             bool      `json:"passwordless"`
 	TwoFAEnabled            bool      `json:"two_fa_enabled"`
 	Passkeys                []Passkey `json:"passkeys,omitempty"`
+	SyncViewPreferences     bool      `json:"sync_view_preferences"`
 }
 
 func BuildUserSettings(u *ent.User, passkeys []*ent.Passkey, parser *uaparser.Parser) *UserSettings {
@@ -40,6 +41,7 @@ func BuildUserSettings(u *ent.User, passkeys []*ent.Passkey, parser *uaparser.Pa
 		Passkeys: lo.Map(passkeys, func(item *ent.Passkey, index int) Passkey {
 			return BuildPasskey(item)
 		}),
+		SyncViewPreferences: u.Settings.SyncViewPreferences,
 	}
 }
 
